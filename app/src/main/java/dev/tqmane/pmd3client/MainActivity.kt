@@ -6,6 +6,7 @@ import android.app.AlertDialog
 import android.graphics.Color
 import android.graphics.Rect
 import android.net.Uri
+import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
@@ -16,6 +17,7 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.webkit.HttpAuthHandler
+import android.webkit.SslErrorHandler
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
@@ -28,7 +30,7 @@ class MainActivity : Activity() {
         private const val PREFS = "pmd3_client"
         private const val KEY_SERVER_URL = "server_url"
         private const val KEY_PASSWORD = "password"
-        private const val DEFAULT_PORT = 8080
+        private const val DEFAULT_PORT = 8131
     }
 
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
@@ -130,13 +132,18 @@ class MainActivity : Activity() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
                     view?.evaluateJavascript(minimalViewerScript, null)
-                    view?.evaluateJavascript("typeof VideoDecoder !== 'undefined'") { result ->
-                        if (result != "true") {
-                            Toast.makeText(
-                                this@MainActivity,
-                                "This Android WebView does not expose WebCodecs VideoDecoder. Update Android System WebView/Chrome.",
-                                Toast.LENGTH_LONG,
-                            ).show()
+                    view?.evaluateJavascript("window.isSecureContext === true") { secureResult ->
+                        view.evaluateJavascript("typeof VideoDecoder !== 'undefined'") { decoderResult ->
+                            val message = when {
+                                secureResult != "true" ->
+                                    "WebCodecs requires HTTPS. Start serve-web with --https and connect with https://."
+                                decoderResult != "true" ->
+                                    "This Android WebView does not expose WebCodecs VideoDecoder."
+                                else -> null
+                            }
+                            if (message != null) {
+                                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                            }
                         }
                     }
                     updateGestureExclusion()
@@ -155,6 +162,30 @@ class MainActivity : Activity() {
                         promptForPassword(handler)
                     }
                 }
+
+                override fun onReceivedSslError(
+                    view: WebView?,
+                    handler: SslErrorHandler?,
+                    error: SslError?,
+                ) {
+                    val configured = runCatching {
+                        Uri.parse(prefs.getString(KEY_SERVER_URL, "").orEmpty())
+                    }.getOrNull()
+                    val errorHost = runCatching { Uri.parse(error?.url.orEmpty()).host }.getOrNull()
+                    val configuredHost = configured?.host
+
+                    val isConfiguredHttps = configured?.scheme.equals("https", ignoreCase = true)
+                    val isConfiguredHost = configuredHost != null &&
+                        errorHost != null &&
+                        configuredHost.equals(errorHost, ignoreCase = true)
+                    val isExpectedSelfSignedError = error?.primaryError == SslError.SSL_UNTRUSTED
+
+                    if (isConfiguredHttps && isConfiguredHost && isExpectedSelfSignedError) {
+                        handler?.proceed()
+                    } else {
+                        handler?.cancel()
+                    }
+                }
             }
         }
 
@@ -168,7 +199,15 @@ class MainActivity : Activity() {
         if (savedUrl.isNullOrBlank()) {
             showSettingsDialog(required = true)
         } else {
-            loadServer(savedUrl)
+            val normalized = normalizeServerUrl(savedUrl)
+            if (normalized == null) {
+                showSettingsDialog(required = true)
+            } else {
+                if (normalized != savedUrl.trimEnd('/')) {
+                    prefs.edit().putString(KEY_SERVER_URL, normalized).apply()
+                }
+                loadServer(normalized)
+            }
         }
     }
 
@@ -236,10 +275,10 @@ class MainActivity : Activity() {
         }
 
         val help = TextView(this).apply {
-            text = "Enter the pymobiledevice3 serve-web address. Host-only input gets http:// and port 8080 automatically.\n\nPress Android Volume Up + Volume Down together any time to reopen this screen."
+            text = "Enter the pymobiledevice3 serve-web address. WebCodecs requires HTTPS; host-only input gets https:// and port 8131 automatically.\n\nPress Android Volume Up + Volume Down together any time to reopen this screen."
         }
         val urlInput = EditText(this).apply {
-            hint = "192.168.1.10 or http://192.168.1.10:8080"
+            hint = "192.168.1.10 or https://192.168.1.10:8131"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             setSingleLine(true)
             setText(currentUrl)
@@ -312,7 +351,7 @@ class MainActivity : Activity() {
         if (!value.startsWith("http://", ignoreCase = true) &&
             !value.startsWith("https://", ignoreCase = true)
         ) {
-            value = "http://$value"
+            value = "https://$value"
         }
 
         val parsed = Uri.parse(value)
@@ -321,10 +360,12 @@ class MainActivity : Activity() {
         val host = parsed.host ?: return null
         if (host.isBlank()) return null
 
-        val port = if (parsed.port != -1) parsed.port else if (scheme == "https") 443 else DEFAULT_PORT
+        // WebCodecs VideoDecoder is a secure-context API. Upgrade old or pasted
+        // HTTP serve-web URLs so existing installs migrate to the HTTPS endpoint.
+        val port = if (parsed.port != -1) parsed.port else DEFAULT_PORT
         val authorityHost = if (host.contains(':')) "[$host]" else host
         return Uri.Builder()
-            .scheme(scheme)
+            .scheme("https")
             .encodedAuthority("$authorityHost:$port")
             .build()
             .toString()

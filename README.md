@@ -6,23 +6,30 @@ It keeps the Android side out of the way: the pmd3 viewer is shown full-screen, 
 
 ## Host setup
 
-Run pymobiledevice3 on the computer connected to the iPhone and expose `serve-web` to your LAN:
+Run pymobiledevice3 on the computer connected to the iPhone and expose `serve-web` to your LAN over HTTPS. WebCodecs `VideoDecoder` is a secure-context API, so plain HTTP LAN URLs will not work in Android WebView.
 
 ```bash
 pymobiledevice3 developer core-device display serve-web \
+  --userspace \
   --bind 0.0.0.0 \
-  --http-port 8080 \
+  --http-port 8131 \
+  --no-audio \
+  --https \
   --password change-me
 ```
 
 Then put the Android device on the same LAN.
 
+`serve-web --https` uses a self-signed certificate. The Android client accepts the expected untrusted-certificate error only for the exact host saved in its connection settings; other certificate errors or hosts are rejected.
+
 ## Android usage
 
 1. Install the APK from the GitHub Actions artifact.
-2. On first launch, enter the host address, for example `192.168.1.10` or `http://192.168.1.10:8080`.
+2. On first launch, enter the host address, for example `192.168.1.10` or `https://192.168.1.10:8131`.
 3. Enter the `serve-web` password if you set one.
 4. The URL and password are saved locally and reused on later launches.
+
+Host-only input automatically becomes `https://<host>:8131`. Existing saved `http://` URLs are migrated to HTTPS while preserving an explicitly configured port.
 
 To reopen connection settings without putting permanent controls over the iPhone display, press **Android Volume Up + Volume Down together**.
 
@@ -34,7 +41,7 @@ To reopen connection settings without putting permanent controls over the iPhone
 - Android system gesture exclusion is requested for the viewer surface on Android 10+.
 - The screen stays awake while the client is open.
 
-The underlying video path is still pmd3 `serve-web`, so Android System WebView/Chrome must expose WebCodecs `VideoDecoder`. The app warns if it is unavailable.
+The underlying video path is still pmd3 `serve-web`, so Android System WebView/Chrome must expose WebCodecs `VideoDecoder`. The app separately reports an insecure context and a genuinely unavailable `VideoDecoder`.
 
 ## CI
 
