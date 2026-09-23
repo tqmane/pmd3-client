@@ -104,7 +104,6 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        enterImmersiveMode()
 
         webView = object : WebView(this) {
             override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -160,7 +159,10 @@ class MainActivity : Activity() {
         }
 
         setContentView(webView)
-        webView.post { updateGestureExclusion() }
+        webView.post {
+            enterImmersiveMode()
+            updateGestureExclusion()
+        }
 
         val savedUrl = prefs.getString(KEY_SERVER_URL, null)
         if (savedUrl.isNullOrBlank()) {
@@ -340,15 +342,16 @@ class MainActivity : Activity() {
     }
 
     private fun enterImmersiveMode() {
+        val decorView = window.decorView
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false)
-            window.insetsController?.let { controller ->
+            decorView.windowInsetsController?.let { controller ->
                 controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
                 controller.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
         } else {
             @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = (
+            decorView.systemUiVisibility = (
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
                     View.SYSTEM_UI_FLAG_FULLSCREEN or
                     View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
